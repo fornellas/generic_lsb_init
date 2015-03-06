@@ -1,0 +1,9 @@
+- LSB Standard actions
+- LSB return codes
+- Optional acion: try-restart
+- Extra action: force-stop (sends SIGKILL)
+- Can be extended to support extra actions
+- force-reload will use reload if implemented, otherwise will restart
+- Support both daemon and no daemon processes
+- start / stop validation (by calling status)
+- nice can be set up

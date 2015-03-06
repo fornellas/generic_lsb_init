@@ -1,0 +1,65 @@
+#!/bin/bash
+### BEGIN INIT INFO
+# Short-Description: Sample sleep service
+# Description: Starts a sleep command, and tracks
+#  its status.
+### END INIT INFO
+
+source ../lib/generic_lsb_init
+
+##
+## Configuration
+##
+
+# Command to be started.
+# Default: none, must be set.
+COMMAND="/bin/sleep"
+
+# Shell array, containing arguments to be passed to $COMMAND.
+# Default: none.
+COMMAND_ARGUMENTS=(
+  10
+  )
+
+# If $COMMAND becomes a daemon, and write its own PID file, set this variable.
+# If unset, it is assumed $COMMAND does not become a daemon, and its PID file
+# must be created and managed.
+# Default: unset
+# COMMAND_PID_FILE=""
+
+# If $COMMAND_PID_FILE is not set, use this prefix to create a PID file.
+# Default: /var/run
+# PID_FILE_PREFIX="/var/run"
+
+# After start, how many seconds to wait and validate a premature death (using
+# status command).
+# Default: 2
+# START_SECONDS=2
+
+# Niceness of $COMMAND (see nice(2)).
+# Default: 0.
+# NICE=0
+
+# Signal to send to stop daemon.
+# Default: SIGTERM
+# STOP_SIGNAL=SIGTERM
+
+# Seconds to wait for the process to exit after sending $STOP_SIGNAL.
+# Default: 10
+# STOP_SECONDS=10
+
+# Shell array containing extra supported actions (eg. reload).
+# Default: empty
+# EXTRA_ACTIONS_LIST=( )
+
+##
+## Main job with lock control
+##
+
+(
+  if ! flock -x -n 3 ; then
+    log_failure_msg "$NAME: Script already running"
+    exit $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+  fi
+  process_argumens "$@"
+) 3< "$0"

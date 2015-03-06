@@ -1,0 +1,369 @@
+##
+## Defaults
+##
+
+NAME="$(basename "$0")"
+unset COMMAND
+unset COMMAND_ARGUMENTS
+unset COMMAND_PID_FILE
+PID_FILE_PREFIX="/var/run"
+START_SECONDS=2
+NICE=0
+STOP_SIGNAL="SIGTERM"
+STOP_SECONDS=10
+unset EXTRA_ACTIONS_LIST
+
+##
+## Actions exit statuses
+##
+
+# 0 Successfull
+ACTION_STATUS_SUCCESSFULL=0
+ACTION_MESSAGE[0]="Successfull"
+# 1 generic or unspecified error (current practice)
+ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR=1
+ACTION_MESSAGE[1]="generic or unspecified error"
+# 2 invalid or excess argument(s)
+ACTION_STATUS_INVALID_OR_EXCESS_ARGUMENTS=2
+ACTION_MESSAGE[2]="invalid or excess argument(s)"
+# 3 unimplemented feature (for example, "reload")
+ACTION_STATUS_UNIMPLEMENTED_FEATURE=3
+ACTION_MESSAGE[3]="unimplemented feature"
+# 4 user had insufficient privilege
+ACTION_STATUS_USER_HAD_INSUFFICIENT_PRIVILEGE=4
+ACTION_MESSAGE[4]="user had insufficient privilege"
+# 5 program is not installed
+ACTION_STATUS_PROGRAM_IS_NOT_INSTALLED=5
+ACTION_MESSAGE[5]="program is not installed"
+# 6 program is not configured
+ACTION_STATUS_PROGRAM_IS_NOT_CONFIGURED=6
+ACTION_MESSAGE[6]="program is not configured"
+# 7 program is not running
+ACTION_STATUS_PROGRAM_IS_NOT_RUNNING=7
+ACTION_MESSAGE[7]="program is not running"
+# 8-99  reserved for future LSB use
+# 100-149 reserved for distribution use
+# 150-199 reserved for application use
+# 200-254 reserved
+
+##
+## Status exit statuses
+##
+
+# 0 program is running or service is OK
+STATUS_CODE_RUNNING=0
+STATUS_CODE_MESSAGE[0]="program is running or service is OK"
+# 1 program is dead and /var/run pid file exists
+STATUS_CODE_DEAD_PID=1
+STATUS_CODE_MESSAGE[1]="program is dead and pid file exists"
+# 2 program is dead and /var/lock lock file exists
+STATUS_CODE_DEAD_LOCK=2
+STATUS_CODE_MESSAGE[2]="program is dead and /var/lock lock file exists"
+# 3 program is not running
+STATUS_CODE_NOT_RUNNING=3
+STATUS_CODE_MESSAGE[3]="program is not running"
+# 4 program or service status is unknown
+STATUS_CODE_UNKNOWN=4
+STATUS_CODE_MESSAGE[4]="program or service status is unknown"
+# 5-99  reserved for future LSB use
+# 100-149 reserved for distribution use
+# 150-199 reserved for application use
+# 200-254 reserved
+
+##
+## Load LSB Functions
+##
+
+source /lib/lsb/init-functions
+
+##
+## Standard Action Functions
+##
+
+# Start
+
+function do_start_call_command() {
+  # Non daemon
+  if [ -z "$COMMAND_PID_FILE" ] ; then
+    nice -n "$NICE" "$COMMAND" "${COMMAND_ARGUMENTS[@]}" &
+    if [ $? -ne 0 ] ; then
+      log_failure_msg "$NAME: failed to start"
+      return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+    fi
+    if ! echo -n $! > "$(pid_file)" ; then
+      log_failure_msg "$NAME: failure writing to $(pid_file)"
+      return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+    fi
+  # Daemon
+  else
+    if ! nice -n "$NICE" "$COMMAND" "${COMMAND_ARGUMENTS[@]}" ; then
+      log_failure_msg "$NAME: failed to start"
+      return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+    fi
+  fi
+}
+
+function do_start_wait () {
+  local WAIT
+  for ((WAIT=0;WAIT<START_SECONDS;WAIT++)) ; do
+    sleep 1
+    do_status quiet
+    local START_STATUS_RETURN=$?
+    case $START_STATUS_RETURN in
+      # Started
+      $STATUS_CODE_RUNNING)
+        # Success
+        log_success_msg "$NAME: started"
+        return $ACTION_STATUS_SUCCESSFULL
+        ;;
+      # Stopped
+      $STATUS_CODE_DEAD_PID|$STATUS_CODE_DEAD_LOCK|$STATUS_CODE_NOT_RUNNING)
+        ;;
+      # Fail
+      *)
+        log_failure_msg "$NAME: started, but unable to get status: ${STATUS_CODE_MESSAGE[$STATUS_RETURN]}"
+        return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+        ;;
+    esac
+  done
+  # Fail
+  log_failure_msg "$NAME: started, but is not running after ${START_SECONDS}s"
+  return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+}
+
+function do_start () {
+  do_status quiet
+  local STATUS_RETURN=$?
+  case $STATUS_RETURN in
+    # Already running
+    $STATUS_CODE_RUNNING)
+      log_success_msg "$NAME: already started"
+      return $ACTION_STATUS_SUCCESSFULL
+      ;;
+    # Stopped, so we start
+    $STATUS_CODE_DEAD_PID|$STATUS_CODE_DEAD_LOCK|$STATUS_CODE_NOT_RUNNING)
+      do_start_call_command && do_start_wait
+      ;;
+    # Error
+    *)
+      log_failure_msg "$NAME: unable to get status: ${STATUS_CODE_MESSAGE[$STATUS_RETURN]}"
+      return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+      ;;
+  esac
+}
+
+# Stop
+
+function do_send_signal () {
+  local SIGNAL="$1"
+  killproc -p "$(pid_file)" "$COMMAND" "$SIGNAL"
+  local KILLPROC_RETURN=$?
+  if [ $KILLPROC_RETURN -ne $ACTION_STATUS_SUCCESSFULL ] ; then
+    log_failure_msg "$NAME: failed to send $SIGNAL"
+    return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+  fi
+}
+
+function do_stop_wait () {
+  local SIGNAL="$1"
+  local WAIT
+  for ((WAIT=0;WAIT<STOP_SECONDS;WAIT++)) ; do
+    sleep 1
+    do_status quiet
+    local STOP_STATUS_RETURN=$?
+    case $STOP_STATUS_RETURN in
+      # Running
+      $STATUS_CODE_RUNNING)
+        ;;
+      # Stopped
+      $STATUS_CODE_DEAD_PID|$STATUS_CODE_DEAD_LOCK|$STATUS_CODE_NOT_RUNNING)
+        # Success
+        log_success_msg "$NAME: stopped"
+        return $ACTION_STATUS_SUCCESSFULL
+        ;;
+      # Fail
+      *)
+        log_failure_msg "$NAME: sent $SIGNAL, but unable to get status: ${STATUS_CODE_MESSAGE[$STATUS_RETURN]}"
+        return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+        ;;
+    esac
+  done
+  # Fail
+  log_failure_msg "$NAME: sent $SIGNAL, but still running after ${STOP_SECONDS}s"
+  return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+}
+
+function do_stop_signal () {
+  local SIGNAL="$1"
+  do_status quiet
+  local STATUS_RETURN=$?
+  case $STATUS_RETURN in
+    # Running
+    $STATUS_CODE_RUNNING)
+      do_send_signal "$SIGNAL" && do_stop_wait "$SIGNAL"
+      ;;
+    # Stopped, so we start
+    $STATUS_CODE_DEAD_PID|$STATUS_CODE_DEAD_LOCK|$STATUS_CODE_NOT_RUNNING)
+      log_success_msg "$NAME: already stopped"
+      return $ACTION_STATUS_SUCCESSFULL
+      ;;
+    # Error
+    *)
+      log_failure_msg "$NAME: unable to get status: ${STATUS_CODE_MESSAGE[$STATUS_RETURN]}"
+      return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+      ;;
+  esac 
+}
+
+function do_stop () {
+  do_stop_signal "$STOP_SIGNAL"
+}
+
+# Restart
+
+function do_restart () {
+  do_stop && do_start
+}
+
+# Force Reload
+
+function do_force_reload () {
+  local HAS_RELOAD=''
+  for EXTRA_ACTION in "${EXTRA_ACTIONS_LIST[@]}" ; do
+    if [ "$EXTRA_ACTION" == "reload" ] ; then
+      HAS_RELOAD=true
+      break
+    fi
+  done
+  if [ -n "$HAS_RELOAD" ] ; then
+    "$0" reload
+  else
+    do_restart
+  fi
+}
+
+# Status
+
+function do_status () {
+  pidofproc -p "$(pid_file)" "$COMMAND" > /dev/null
+  local STATUS_RETURN=$?
+  local MESSAGE="$NAME: ${STATUS_CODE_MESSAGE[$STATUS_RETURN]}"
+  if [ -z "$1" ] ; then
+    if [ $STATUS_RETURN -eq $STATUS_CODE_RUNNING ] ; then
+      log_success_msg "$MESSAGE"
+    else
+      log_failure_msg "$MESSAGE"
+    fi
+  fi
+  return $STATUS_RETURN
+}
+
+##
+## Optional Actions
+##
+
+# Try Restart
+
+function do_try_restart () {
+  do_status quiet
+  local STATUS_RETURN=$?
+  case $STATUS_RETURN in
+    $STATUS_CODE_RUNNING)
+      do_restart
+      ;;
+    $STATUS_CODE_DEAD_PID|$STATUS_CODE_DEAD_LOCK|$STATUS_CODE_NOT_RUNNING)
+      log_success_msg "$NAME: not running, not restarted"
+      return $ACTION_STATUS_SUCCESSFULL
+      ;;
+    *)
+      log_failure_msg "$NAME: unable to get satus: ${STATUS_CODE_MESSAGE[$STATUS_RETURN]}"
+      return $ACTION_STATUS_GENERIC_OR_UNSPECIFIED_ERROR
+      ;;
+  esac
+}
+
+##
+## Extra Actions
+##
+
+# Force Stop
+
+function do_force_stop () {
+  do_stop_signal SIGKILL
+}
+
+# Help
+
+function do_help () {
+  local ACTIONS="start|stop|restart|force-reload|status|reload|try-restart|force-stop"
+  if [ -n "$EXTRA_ACTIONS_LIST" ] ; then
+    ACTIONS="$ACTIONS|$(echo "${EXTRA_ACTIONS_LIST[@]}" | tr \  \|)"
+  fi
+  echo "Usage: $0 {$ACTIONS|help}"
+  return $ACTION_STATUS_SUCCESSFULL
+}
+
+##
+## Helper functions
+##
+
+function validate_extra_args () {
+  if [ $# -gt 1 ] ; then
+    log_failure_msg "$NAME: too many arguments"
+    exit $ACTION_STATUS_INVALID_OR_EXCESS_ARGUMENTS
+  fi
+}
+
+function pid_file () {
+  if [ -n "$COMMAND_PID_FILE" ] ; then
+    echo -n "$COMMAND_PID_FILE"
+  else
+    echo -n "$PID_FILE_PREFIX/$NAME.pid"
+  fi
+}
+
+##
+## Arguments processing
+##
+
+function process_argumens () {
+  validate_extra_args "$@"
+  if [ $# -eq 0 ] ; then
+    do_help
+    exit $ACTION_STATUS_SUCCESSFULL
+  fi
+  case "$1" in
+    # Standard
+    start)
+      do_start
+      ;;
+    stop)
+      do_stop
+      ;;
+    restart)
+      do_restart
+      ;;
+    force-reload)
+      do_force_reload
+      ;;
+    status)
+      do_status
+      ;;
+    # Optional
+    try-restart)
+      do_try_restart
+      ;;
+    # Extra
+    force-stop)
+      do_force_stop
+      ;;
+    help)
+      do_help
+      ;;
+    # Error
+    *)
+      log_failure_msg "$NAME: unimplemented feature '$1'"
+      return $ACTION_STATUS_UNIMPLEMENTED_FEATURE
+      ;;
+  esac
+}

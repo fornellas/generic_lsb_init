@@ -1,0 +1,5 @@
+- Always start witth same environment
+- stdout/stderr redirection / log rotation
+- custom: user, group, chroot, chdir, env, core, nice
+- hooks: pre/post run for each action
+- automated testes
